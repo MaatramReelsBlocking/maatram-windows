@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maatram Hard Lock</title>
+<style>
+:root{
+  --bg:#050b09; --surface:rgba(255,255,255,.045); --line:rgba(255,255,255,.12);
+  --ink:#e8f5ef; --dim:#9bb3a8; --green:#2fe38f; --blue:#4cc9f0; --danger:#ff7b7b;
+  --grad:linear-gradient(135deg,var(--green),var(--blue));
+  --font:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 var(--font);overflow:hidden;-webkit-font-smoothing:antialiased}
+.orb{position:fixed;border-radius:50%;filter:blur(70px);opacity:.28;pointer-events:none;will-change:transform}
+.o1{width:300px;height:300px;background:var(--green);top:-120px;left:-100px;animation:d1 22s ease-in-out infinite alternate}
+.o2{width:280px;height:280px;background:var(--blue);bottom:-120px;right:-100px;animation:d2 26s ease-in-out infinite alternate}
+@keyframes d1{to{transform:translate(70px,90px)}}
+@keyframes d2{to{transform:translate(-70px,-80px)}}
+main{position:relative;height:100%;display:flex;flex-direction:column;padding:20px 20px 16px;gap:16px;overflow-y:auto}
+header{display:flex;align-items:center;gap:12px}
+.mark{width:40px;height:40px;border-radius:11px;background:#050b09;border:1px solid var(--line);display:grid;place-items:center;flex:none}
+.brand{font-weight:800;letter-spacing:.16em;font-size:1.05rem;line-height:1.1}
+.sub{display:block;font-size:.78rem;font-weight:600;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;backdrop-filter:blur(10px)}
+h2{font-size:.78rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:12px}
+[hidden]{display:none!important}
+.chips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.chip{min-height:48px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--ink);font:600 1rem var(--font);cursor:pointer;transition:border-color .15s,background .15s}
+.chip:hover{border-color:var(--green)}
+.chip[aria-checked="true"]{background:var(--grad);color:#04120f;border-color:transparent}
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.add{display:flex;gap:8px}
+input[type=text]{flex:1;min-width:0;min-height:48px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.35);color:var(--ink);padding:0 14px;font:1rem var(--font)}
+input::placeholder{color:#7f968b}
+.btn2{min-height:48px;padding:0 18px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--ink);font:600 1rem var(--font);cursor:pointer}
+.btn2:hover{border-color:var(--green)}
+.tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;list-style:none;padding:0}
+.tag{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 6px 0 12px;border-radius:999px;background:rgba(47,227,143,.1);border:1px solid rgba(47,227,143,.35);font-size:.9rem}
+.tag button{width:32px;height:32px;border:0;border-radius:50%;background:transparent;color:var(--ink);cursor:pointer;display:grid;place-items:center}
+.tag button:hover{background:rgba(255,255,255,.12)}
+.hint{font-size:.82rem;color:var(--dim);margin-top:8px}
+details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-weight:600;list-style-position:inside}
+.bl{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 12px;list-style:none;padding:0;font-size:.82rem;color:var(--dim)}
+.bl li{padding:2px 10px;border-radius:999px;border:1px solid var(--line)}
+.bl-t{font-size:.78rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-top:6px}
+.start{min-height:56px;border:0;border-radius:14px;background:var(--grad);color:#04120f;font:800 1.05rem var(--font);letter-spacing:.04em;cursor:pointer;margin-top:auto;transition:transform .15s,filter .15s}
+.start:hover{filter:brightness(1.08)}
+.start:active{transform:scale(.985)}
+.start:disabled{opacity:.55;cursor:default}
+#err{min-height:1.4em;color:var(--danger);font-size:.9rem}
+#locked{display:flex;flex-direction:column;align-items:center;gap:20px;margin-top:8px}
+.ringwrap{position:relative;width:240px;height:240px}
+.ringwrap svg{width:100%;height:100%;transform:rotate(-90deg)}
+.track{fill:none;stroke:rgba(255,255,255,.1);stroke-width:10}
+.prog{fill:none;stroke:url(#rg);stroke-width:10;stroke-linecap:round;stroke-dasharray:578.05;stroke-dashoffset:0;transition:stroke-dashoffset 1s linear}
+.center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#time{font:800 2.8rem/1 var(--font);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.lbl{font-size:.78rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-top:8px}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;width:100%}
+.stat{text-align:center}
+.stat b{display:block;font-size:1.6rem;font-variant-numeric:tabular-nums}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;border:1px solid rgba(47,227,143,.45);background:rgba(47,227,143,.1);font-weight:700;font-size:.9rem}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+@media (prefers-reduced-motion:reduce){
+  .orb{animation:none}
+  .prog,.chip,.start{transition:none}
+}
+</style>
+</head>
+<body>
+<div class="orb o1" aria-hidden="true"></div>
+<div class="orb o2" aria-hidden="true"></div>
+<main>
+  <header>
+    <span class="mark" aria-hidden="true">
+      <svg width="26" height="26" viewBox="0 0 100 100"><defs><linearGradient id="mg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2fe38f"/><stop offset="1" stop-color="#4cc9f0"/></linearGradient></defs>
+      <polygon fill="url(#mg)" points="22,78 22,22 36,22 50,52 64,22 78,22 78,78 66,78 66,42 54,70 46,70 34,42 34,78"/></svg>
+    </span>
+    <div class="brand">MAATRAM<span class="sub">Hard Lock</span></div>
+  </header>
+
+  <section id="idle">
+    <div class="card">
+      <h2 id="dur-h">Duration</h2>
+      <div class="chips" id="chips" role="radiogroup" aria-labelledby="dur-h"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2 id="add-h">Also block</h2>
+      <form class="add" id="addForm">
+        <input type="text" id="addInp" aria-labelledby="add-h" placeholder="example.com or game.exe" autocomplete="off" spellcheck="false" maxlength="100">
+        <button class="btn2" type="submit">Add</button>
+      </form>
+      <ul class="tags" id="tags" aria-label="Custom blocklist"></ul>
+      <details style="margin-top:8px">
+        <summary>Built-in blocklist</summary>
+        <div class="bl-t">Sites</div><ul class="bl" id="blSites"></ul>
+        <div class="bl-t">Apps</div><ul class="bl" id="blApps"></ul>
+      </details>
+    </div>
+  </section>
+
+  <section id="locked" hidden aria-live="off">
+    <span class="pill"><span class="dot" aria-hidden="true"></span>Locked</span>
+    <div class="ringwrap">
+      <svg viewBox="0 0 200 200" aria-hidden="true">
+        <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2fe38f"/><stop offset="1" stop-color="#4cc9f0"/></linearGradient></defs>
+        <circle class="track" cx="100" cy="100" r="92"/>
+        <circle class="prog" id="prog" cx="100" cy="100" r="92"/>
+      </svg>
+      <div class="center"><div id="time" role="timer" aria-label="Time left">00:00</div><div class="lbl">Time left</div></div>
+    </div>
+    <div class="stats">
+      <div class="card stat"><b id="blocked">0</b><span class="lbl">Blocked attempts</span></div>
+      <div class="card stat"><b id="ends">--:--</b><span class="lbl">Ends at</span></div>
+    </div>
+    <ul class="tags" id="lockTags" aria-label="Custom blocklist"></ul>
+  </section>
+
+  <p id="err" role="alert"></p>
+  <button class="start" id="start">Start Hard Lock</button>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var C = 578.05;
+  var DURATIONS = [5, 15, 25, 45, 60, 90];
+
+  // Real backend inside Tauri; tiny in-memory stand-in so the page also previews in a plain browser.
+  var T = window.__TAURI__ && window.__TAURI__.core;
+  var invoke = T ? T.invoke.bind(T) : (function () {
+    var lock = null;
+    return function (cmd, args) {
+      if (cmd === "get_blocklist") return Promise.resolve({ sites: ["instagram.com", "youtube.com"], apps: ["whatsapp.exe", "instagram.exe"] });
+      if (cmd === "start_lock") { lock = { s: Date.now(), e: Date.now() + args.minutes * 60000, sites: args.sites, apps: args.apps }; return Promise.resolve(); }
+      var rem = lock ? Math.max(0, Math.ceil((lock.e - Date.now()) / 1000)) : 0;
+      if (lock && !rem) lock = null;
+      return Promise.resolve(lock
+        ? { active: true, remaining_secs: rem, total_secs: Math.round((lock.e - lock.s) / 1000), blocked: 0, custom_sites: lock.sites, custom_apps: lock.apps }
+        : { active: false, remaining_secs: 0, total_secs: 0, blocked: 0, custom_sites: [], custom_apps: [] });
+    };
+  })();
+
+  var minutes = 25, sites = [], apps = [], busy = false, wasActive = null;
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function fmt(s) {
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+    return (h ? h + ":" + pad(m) : pad(m)) + ":" + pad(x);
+  }
+  function tags(el, list) {
+    el.textContent = "";
+    list.forEach(function (name) {
+      var li = document.createElement("li"); li.className = "tag";
+      li.style.paddingRight = "12px";
+      var sp = document.createElement("span"); sp.textContent = name; li.appendChild(sp);
+      el.appendChild(li);
+    });
+  }
+  function drawTags() {
+    var el = $("tags"); el.textContent = "";
+    sites.concat(apps).forEach(function (name) {
+      var isSite = sites.indexOf(name) > -1;
+      var li = document.createElement("li"); li.className = "tag";
+      var sp = document.createElement("span"); sp.textContent = name; li.appendChild(sp);
+      var b = document.createElement("button"); b.type = "button";
+      b.setAttribute("aria-label", "Remove " + name); b.textContent = "×";
+      b.onclick = function () { var arr = isSite ? sites : apps; arr.splice(arr.indexOf(name), 1); drawTags(); };
+      li.appendChild(b); el.appendChild(li);
+    });
+  }
+  function drawChips() {
+    var box = $("chips"); box.textContent = "";
+    DURATIONS.forEach(function (d) {
+      var b = document.createElement("button"); b.type = "button"; b.className = "chip";
+      b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(d === minutes));
+      b.textContent = d + " min";
+      b.onclick = function () { minutes = d; drawChips(); };
+      box.appendChild(b);
+    });
+  }
+  function fill(el, list) {
+    el.textContent = "";
+    list.forEach(function (n) { var li = document.createElement("li"); li.textContent = n; el.appendChild(li); });
+  }
+  function setErr(msg) { $("err").textContent = msg || ""; }
+
+  function render(s) {
+    if (s.active !== wasActive) {
+      wasActive = s.active;
+      $("idle").hidden = s.active; $("locked").hidden = !s.active; $("start").hidden = s.active;
+      if (s.active) setErr("");
+    }
+    if (!s.active) return;
+    $("time").textContent = fmt(s.remaining_secs);
+    $("blocked").textContent = String(s.blocked);
+    var end = new Date(Date.now() + s.remaining_secs * 1000);
+    $("ends").textContent = pad(end.getHours()) + ":" + pad(end.getMinutes());
+    var frac = s.total_secs ? s.remaining_secs / s.total_secs : 0;
+    $("prog").style.strokeDashoffset = String(C * (1 - frac));
+    tags($("lockTags"), s.custom_sites.concat(s.custom_apps));
+  }
+  function poll() {
+    invoke("get_state").then(render).catch(function (e) { setErr(String(e)); });
+  }
+
+  $("addForm").onsubmit = function (ev) {
+    ev.preventDefault();
+    var v = $("addInp").value.trim().toLowerCase();
+    if (!v) return;
+    var isSite = v.indexOf(".") > -1 && !/\.exe$/.test(v);
+    var arr = isSite ? sites : apps;
+    if (arr.indexOf(v) === -1 && sites.length + apps.length < 30) arr.push(v);
+    $("addInp").value = ""; setErr(""); drawTags();
+  };
+  $("start").onclick = function () {
+    if (busy) return;
+    busy = true; $("start").disabled = true; setErr("");
+    invoke("start_lock", { minutes: minutes, sites: sites, apps: apps })
+      .then(function () { sites = []; apps = []; drawTags(); poll(); })
+      .catch(function (e) { setErr(String(e)); })
+      .then(function () { busy = false; $("start").disabled = false; });
+  };
+
+  drawChips();
+  invoke("get_blocklist").then(function (b) { fill($("blSites"), b.sites); fill($("blApps"), b.apps); }).catch(function () {});
+  poll();
+  setInterval(poll, 1000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) poll(); });
+})();
+</script>
+</body>
+</html>
