@@ -24,9 +24,9 @@ Windows will show "Unknown publisher" (the file is not code-signed). Click **Mor
 Run this checklist:
 
 1. Open the app, pick **5 min**, press **Start Hard Lock**.
-2. Open instagram.com in Edge or Chrome. It should fail to load.
+2. Open instagram.com in Edge or Chrome. It should fail to load. (A tab that was already open before the lock can keep working for a minute on its old connection; close the browser and reopen it.)
 3. Open WhatsApp or Discord if installed. It should close within about 2 seconds, and **Blocked attempts** goes up.
-4. Close the window with the X. It should go to the tray, not quit. Open it again from the tray icon.
+4. Close the window with the X. It should go to the tray, not quit. Open it again from the tray icon, or by launching Maatram from the Start menu (it brings the running window back instead of opening a second copy).
 5. Open Task Manager and end `maatram-hardlock.exe`. The watchdog should bring it back within about 10 seconds.
 6. Restart Windows mid-lock. After you sign in, the lock should still be running.
 7. Wait for the timer to end. Sites and apps should work again, and `C:\Windows\System32\drivers\etc\hosts` should have no `MAATRAM` lines.
@@ -34,6 +34,8 @@ Run this checklist:
 ## If something goes wrong
 
 Right-click **Maatram-Restore.bat** → **Run as administrator**. It removes the lock, stops the app and watchdog, deletes the sign-in tasks, and cleans the hosts file.
+
+Uninstalling Maatram (Settings → Apps) also ends any running lock and cleans the hosts file, so sites are never left blocked.
 
 ## Known limits (v0.1)
 
@@ -50,6 +52,7 @@ src-tauri/src/main.rs    lock state, watchdog, app killer, hosts blocker, tray
 src-tauri/src/logic.rs   blocklists + hosts-file text logic, unit-tested
 src-tauri/app.manifest   asks Windows for administrator rights
 .github/workflows/       builds the installer on windows-latest
+src-tauri/windows/hooks.nsh  uninstaller hook that ends a running lock
 Maatram-Restore.bat      emergency cleanup
 ```
 

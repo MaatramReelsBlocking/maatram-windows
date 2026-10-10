@@ -22,6 +22,7 @@ use tauri::{
 const TASK: &str = "MaatramHardLock"; // logon task -> main app (hidden to tray)
 const DOG: &str = "MaatramWatchdog"; // logon task -> watchdog
 const MAX_MIN: u32 = 90;
+const MAX_CUSTOM: usize = 30; // same cap as the UI
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000; // CREATE_NO_WINDOW
 
@@ -86,18 +87,10 @@ fn load() -> Option<Lock> {
     load_raw()
 }
 
-/// Write-then-rename so the watchdog (another process) and the UI never read a half-written lock.json.
-/// Callers hold `guard()`.
-fn write_lock(json: &str) -> std::io::Result<()> {
-    let tmp = data_dir().join("lock.json.tmp");
-    fs::write(&tmp, json)?;
-    fs::rename(&tmp, lock_path())
-}
-
 fn save(l: &Lock) -> Result<(), String> {
     let _g = guard();
     let json = serde_json::to_string(l).map_err(|e| e.to_string())?;
-    write_lock(&json).map_err(|e| format!("Cannot save lock: {e}"))
+    fs::write(lock_path(), json).map_err(|e| format!("Cannot save lock: {e}"))
 }
 
 fn bump(n: u32) {
@@ -105,15 +98,9 @@ fn bump(n: u32) {
     if let Some(mut l) = load_raw() {
         l.blocked += n;
         if let Ok(json) = serde_json::to_string(&l) {
-            let _ = write_lock(&json);
+            let _ = fs::write(lock_path(), json);
         }
     }
-}
-
-/// An Instant far enough back that the first 5 s cooldown check passes.
-/// `Instant::now() - 60s` panics when the machine booted less than 60 s ago (autostart at logon).
-fn long_ago() -> Instant {
-    Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now)
 }
 
 fn is_locked() -> bool {
@@ -152,7 +139,8 @@ fn refresh(sys: &mut System) {
     );
 }
 
-/// (other main instances, other watchdogs), excluding this process.
+/// (other main instances, other watchdogs with a lower PID), excluding this process.
+/// The lower-PID rule picks exactly one surviving watchdog when several start at once.
 fn peers(sys: &mut System) -> (usize, usize) {
     refresh(sys);
     let (me, name) = (std::process::id(), exe_name());
@@ -162,7 +150,9 @@ fn peers(sys: &mut System) -> (usize, usize) {
             continue;
         }
         if is_dog(p) {
-            dogs += 1;
+            if pid.as_u32() < me {
+                dogs += 1;
+            }
         } else {
             mains += 1;
         }
@@ -196,7 +186,7 @@ fn create_task(name: &str, arg: &str) {
     let exe_s = exe.to_string_lossy().to_string();
     // XML so the task also runs on battery and never times out (schtasks CLI defaults cannot).
     let xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
   <Principals><Principal id="A"><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
@@ -214,8 +204,10 @@ fn create_task(name: &str, arg: &str) {
         exe_s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"),
         arg
     );
+    // schtasks /XML reliably reads only UTF-16 LE with BOM (the format Task Scheduler itself exports).
+    let bytes: Vec<u8> = std::iter::once(0xFEFF).chain(xml.encode_utf16()).flat_map(u16::to_le_bytes).collect();
     let path = data_dir().join(format!("{name}.xml"));
-    let made = fs::write(&path, xml).is_ok()
+    let made = fs::write(&path, bytes).is_ok()
         && run("schtasks", &["/Create", "/TN", name, "/XML", &path.to_string_lossy(), "/F"]);
     if !made {
         run("schtasks", &["/Create", "/TN", name, "/TR", &format!("\"{exe_s}\" {arg}"), "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"]);
@@ -237,15 +229,29 @@ fn apply_hosts(l: &Lock) -> Result<(), String> {
     let cur = read_hosts();
     let want = logic::with_block(&cur, &logic::hosts_block(&l.sites));
     if want != cur {
+        clear_readonly();
         fs::write(hosts_path(), want).map_err(|e| format!("Cannot edit the hosts file ({e}). Run Maatram as administrator."))?;
         run("ipconfig", &["/flushdns"]);
     }
     Ok(())
 }
 
+/// Some PCs (and some "hosts protection" tools) mark the hosts file read-only, which makes every write fail.
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_readonly() {
+    if let Ok(m) = fs::metadata(hosts_path()) {
+        let mut p = m.permissions();
+        if p.readonly() {
+            p.set_readonly(false);
+            let _ = fs::set_permissions(hosts_path(), p);
+        }
+    }
+}
+
 fn restore_hosts() {
     let cur = read_hosts();
     if logic::has_block(&cur) {
+        clear_readonly();
         let _ = fs::write(hosts_path(), logic::strip_block(&cur));
         run("ipconfig", &["/flushdns"]);
     }
@@ -260,12 +266,10 @@ fn end_lock() {
     let _ = fs::remove_file(lock_path());
 }
 
-fn tick(sys: &mut System, last_dog_launch: &mut Instant) {
-    let Some(l) = load() else {
-        // No lock (ended, deleted, or lock.json corrupt): never leave the hosts block behind.
-        restore_hosts();
-        return;
-    };
+/// `seen`: apps killed on the previous tick. One open attempt = one app name appearing,
+/// however many processes it spawns (Discord, Steam run several) and however many ticks it retries.
+fn tick(sys: &mut System, last_dog_launch: &mut Instant, seen: &mut HashSet<String>) {
+    let Some(l) = load() else { return };
     if now_ms() >= l.end_ms {
         end_lock();
         return;
@@ -273,31 +277,43 @@ fn tick(sys: &mut System, last_dog_launch: &mut Instant) {
     let _ = apply_hosts(&l);
     refresh(sys);
     let (names, me, exe) = (merged_apps(&l), std::process::id(), exe_name());
-    let (mut killed, mut dogs) = (0u32, 0u32);
+    let mut dogs = 0u32;
+    let mut killed = HashSet::new();
     for (pid, p) in sys.processes() {
         let n = p.name().to_string_lossy().to_lowercase();
         if names.contains(&n) {
             if p.kill() {
-                killed += 1;
+                killed.insert(n);
             }
         } else if n == exe && pid.as_u32() != me && is_dog(p) {
             dogs += 1;
         }
     }
-    if killed > 0 {
-        bump(killed);
+    let new = killed.difference(seen).count() as u32;
+    if new > 0 {
+        bump(new);
     }
+    *seen = killed;
     if dogs == 0 && last_dog_launch.elapsed() > Duration::from_secs(5) {
         launch(DOG, "--watchdog");
         *last_dog_launch = Instant::now();
     }
 }
 
-fn enforce() {
+fn show_flag() -> PathBuf {
+    data_dir().join("show")
+}
+
+fn enforce(app: AppHandle) {
     let mut sys = System::new();
-    let mut last = long_ago();
+    let mut last = Instant::now() - Duration::from_secs(60);
+    let mut seen = HashSet::new();
     loop {
-        tick(&mut sys, &mut last);
+        tick(&mut sys, &mut last, &mut seen);
+        // A second launch left a note instead of opening a duplicate: bring this window up.
+        if fs::remove_file(show_flag()).is_ok() {
+            show(&app);
+        }
         thread::sleep(Duration::from_secs(1));
     }
 }
@@ -305,22 +321,20 @@ fn enforce() {
 /// Second process: if the app disappears during a lock, bring it back; clean up if the lock expired.
 fn watchdog() {
     let mut sys = System::new();
-    if peers(&mut sys).1 > 0 {
-        return;
-    }
-    let mut last = long_ago();
+    let mut last = Instant::now() - Duration::from_secs(60);
     loop {
+        let (mains, older_dogs) = peers(&mut sys);
+        if older_dogs > 0 {
+            return; // another watchdog wins; never two, never zero
+        }
         match load() {
-            None => {
-                restore_hosts();
-                return;
-            }
+            None => return,
             Some(l) if now_ms() >= l.end_ms => {
                 end_lock();
                 return;
             }
             Some(_) => {
-                if peers(&mut sys).0 == 0 && last.elapsed() > Duration::from_secs(5) {
+                if mains == 0 && last.elapsed() > Duration::from_secs(5) {
                     launch(TASK, "--autostart");
                     last = Instant::now();
                 }
@@ -328,6 +342,24 @@ fn watchdog() {
         }
         thread::sleep(Duration::from_secs(2));
     }
+}
+
+/// Run by the uninstaller (`--cleanup`): uninstalling mid-lock must never leave sites blocked forever.
+fn cleanup() {
+    {
+        let _g = guard();
+        let _ = fs::remove_file(lock_path());
+    }
+    thread::sleep(Duration::from_secs(3)); // watchdog sees no lock and exits instead of relaunching
+    let mut sys = System::new();
+    refresh(&mut sys);
+    let (me, name) = (std::process::id(), exe_name());
+    for (pid, p) in sys.processes() {
+        if pid.as_u32() != me && p.name().to_string_lossy().to_lowercase() == name {
+            p.kill();
+        }
+    }
+    end_lock();
 }
 
 // ---------- commands ----------
@@ -354,10 +386,15 @@ fn get_state() -> State {
     }
 }
 
+// async: Tauri runs sync commands on the UI thread, and the schtasks/ipconfig calls here
+// would freeze the window ("Not responding") for a second or two.
 #[tauri::command]
-fn start_lock(minutes: u32, sites: Vec<String>, apps: Vec<String>) -> Result<(), String> {
+async fn start_lock(minutes: u32, sites: Vec<String>, apps: Vec<String>) -> Result<(), String> {
     if !(1..=MAX_MIN).contains(&minutes) {
         return Err(format!("Pick 1 to {MAX_MIN} minutes"));
+    }
+    if sites.len() + apps.len() > MAX_CUSTOM {
+        return Err(format!("Add at most {MAX_CUSTOM} custom entries"));
     }
     if is_locked() {
         return Err("A lock is already running".into());
@@ -393,9 +430,15 @@ fn main() {
     if env::args().any(|a| a == "--watchdog") {
         return watchdog();
     }
-    if peers(&mut System::new()).0 > 0 {
-        return; // one main instance only
+    if env::args().any(|a| a == "--cleanup") {
+        return cleanup();
     }
+    if peers(&mut System::new()).0 > 0 {
+        // One main instance only. Ask the running one (maybe hidden in the tray) to show itself.
+        let _ = fs::write(show_flag(), "");
+        return;
+    }
+    let _ = fs::remove_file(show_flag()); // stale note from a crash must not pop the window later
 
     tauri::Builder::default()
         .setup(|app| {
@@ -407,9 +450,12 @@ fn main() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id().as_ref() {
                     "open" => show(app),
-                    "quit" if !is_locked() => app.exit(0),
+                    // Quit is refused during a lock; show the timer so the click is not silently ignored.
+                    "quit" if is_locked() => show(app),
+                    "quit" => app.exit(0),
                     _ => {}
                 })
+                .tooltip("Maatram Hard Lock")
                 .on_tray_icon_event(|tray, ev| {
                     if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
                         show(tray.app_handle());
@@ -423,7 +469,8 @@ fn main() {
             if !(env::args().any(|a| a == "--autostart") && is_locked()) {
                 show(app.handle());
             }
-            thread::spawn(enforce);
+            let handle = app.handle().clone();
+            thread::spawn(move || enforce(handle));
             Ok(())
         })
         .on_window_event(|window, event| {

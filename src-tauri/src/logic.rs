@@ -81,7 +81,7 @@ pub fn clean_site(raw: &str) -> Result<String, String> {
     if let Some(i) = s.find("://") {
         s = s[i + 3..].to_string();
     }
-    if let Some(i) = s.find(|c| c == '/' || c == '?' || c == '#') {
+    if let Some(i) = s.find(['/', '?', '#']) {
         s.truncate(i);
     }
     if let Some(i) = s.find(':') {
