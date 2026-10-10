@@ -86,10 +86,18 @@ fn load() -> Option<Lock> {
     load_raw()
 }
 
+/// Write-then-rename so the watchdog (another process) and the UI never read a half-written lock.json.
+/// Callers hold `guard()`.
+fn write_lock(json: &str) -> std::io::Result<()> {
+    let tmp = data_dir().join("lock.json.tmp");
+    fs::write(&tmp, json)?;
+    fs::rename(&tmp, lock_path())
+}
+
 fn save(l: &Lock) -> Result<(), String> {
     let _g = guard();
     let json = serde_json::to_string(l).map_err(|e| e.to_string())?;
-    fs::write(lock_path(), json).map_err(|e| format!("Cannot save lock: {e}"))
+    write_lock(&json).map_err(|e| format!("Cannot save lock: {e}"))
 }
 
 fn bump(n: u32) {
@@ -97,9 +105,15 @@ fn bump(n: u32) {
     if let Some(mut l) = load_raw() {
         l.blocked += n;
         if let Ok(json) = serde_json::to_string(&l) {
-            let _ = fs::write(lock_path(), json);
+            let _ = write_lock(&json);
         }
     }
+}
+
+/// An Instant far enough back that the first 5 s cooldown check passes.
+/// `Instant::now() - 60s` panics when the machine booted less than 60 s ago (autostart at logon).
+fn long_ago() -> Instant {
+    Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or_else(Instant::now)
 }
 
 fn is_locked() -> bool {
@@ -247,7 +261,11 @@ fn end_lock() {
 }
 
 fn tick(sys: &mut System, last_dog_launch: &mut Instant) {
-    let Some(l) = load() else { return };
+    let Some(l) = load() else {
+        // No lock (ended, deleted, or lock.json corrupt): never leave the hosts block behind.
+        restore_hosts();
+        return;
+    };
     if now_ms() >= l.end_ms {
         end_lock();
         return;
@@ -277,7 +295,7 @@ fn tick(sys: &mut System, last_dog_launch: &mut Instant) {
 
 fn enforce() {
     let mut sys = System::new();
-    let mut last = Instant::now() - Duration::from_secs(60);
+    let mut last = long_ago();
     loop {
         tick(&mut sys, &mut last);
         thread::sleep(Duration::from_secs(1));
@@ -290,10 +308,13 @@ fn watchdog() {
     if peers(&mut sys).1 > 0 {
         return;
     }
-    let mut last = Instant::now() - Duration::from_secs(60);
+    let mut last = long_ago();
     loop {
         match load() {
-            None => return,
+            None => {
+                restore_hosts();
+                return;
+            }
             Some(l) if now_ms() >= l.end_ms => {
                 end_lock();
                 return;
