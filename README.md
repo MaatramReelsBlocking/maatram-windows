@@ -6,6 +6,7 @@ Hard Lock only. Pick a duration, start the lock, and for that time:
 - **Sites are blocked** system-wide through the Windows hosts file: Instagram, YouTube, TikTok, Snapchat, Facebook, X/Twitter, Reddit, WhatsApp Web, Telegram, Discord, Twitch. You can add your own sites before starting.
 - **The lock survives**: closing the window hides it to the tray, a second watchdog process restarts the app if it is ended, and a sign-in task brings both back after a reboot.
 - **It ends by itself** at the timer: sites and apps are unblocked automatically. Maximum lock is 90 minutes.
+- **Linked devices**: enter the link code from maatram.co.in under **Link devices**. A Hard Lock started on your phone (Maatram Hard Lock app), the website or the Chrome extension then locks this PC too, checked about once a minute, and a lock started here is sent to them. While linked, Maatram starts with Windows and closing the window hides it to the tray (use **Quit** in the tray menu when no lock runs). A shared lock can only be extended, never shortened.
 
 Backend is pure Rust (Tauri 2). The window is one plain HTML file in `ui/`.
 
