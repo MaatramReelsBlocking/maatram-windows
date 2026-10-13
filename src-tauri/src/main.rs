@@ -36,6 +36,8 @@ struct Lock {
     sites: Vec<String>, // custom only; built-ins live in logic.rs
     apps: Vec<String>,
     blocked: u32,
+    #[serde(default)]
+    seen_ms: u64, // wall time of the last check, so a clock change can't end the lock (see logic::shift_end)
 }
 
 #[derive(Serialize)]
@@ -88,20 +90,40 @@ fn load() -> Option<Lock> {
     load_raw()
 }
 
+/// Write-then-rename, so the other process never reads a half-written file.
+fn write_raw(l: &Lock) -> Result<(), String> {
+    let json = serde_json::to_string(l).map_err(|e| e.to_string())?;
+    let tmp = data_dir().join("lock.json.tmp");
+    fs::write(&tmp, json).and_then(|_| fs::rename(&tmp, lock_path())).map_err(|e| format!("Cannot save lock: {e}"))
+}
+
 fn save(l: &Lock) -> Result<(), String> {
     let _g = guard();
-    let json = serde_json::to_string(l).map_err(|e| e.to_string())?;
-    fs::write(lock_path(), json).map_err(|e| format!("Cannot save lock: {e}"))
+    write_raw(l)
 }
 
 fn bump(n: u32) {
     let _g = guard();
     if let Some(mut l) = load_raw() {
         l.blocked += n;
-        if let Ok(json) = serde_json::to_string(&l) {
-            let _ = fs::write(lock_path(), json);
-        }
+        let _ = write_raw(&l);
     }
+}
+
+/// Loads the lock with its end moved by any wall-clock jump since the last check, and records this check.
+/// `last`: when this process last checked (None = first check, so time the app wasn't running counts as paused).
+fn advance(last: &mut Option<Instant>) -> Option<Lock> {
+    let _g = guard();
+    let mut l = load_raw()?;
+    let now = now_ms();
+    let expected = last.map_or(0, |t| t.elapsed().as_millis() as u64);
+    let end = logic::shift_end(l.end_ms, l.seen_ms, now, expected);
+    l.start_ms = (i128::from(l.start_ms) + i128::from(end) - i128::from(l.end_ms)).max(0) as u64; // keep the total
+    l.end_ms = end;
+    l.seen_ms = now;
+    *last = Some(Instant::now());
+    let _ = write_raw(&l);
+    Some(l)
 }
 
 fn link_path() -> PathBuf {
@@ -292,8 +314,8 @@ fn end_lock() {
 
 /// `seen`: apps killed on the previous tick. One open attempt = one app name appearing,
 /// however many processes it spawns (Discord, Steam run several) and however many ticks it retries.
-fn tick(sys: &mut System, last_dog_launch: &mut Instant, seen: &mut HashSet<String>) {
-    let Some(l) = load() else { return };
+fn tick(sys: &mut System, last_dog_launch: &mut Instant, seen: &mut HashSet<String>, checked: &mut Option<Instant>) {
+    let Some(l) = advance(checked) else { return };
     if now_ms() >= l.end_ms {
         end_lock();
         return;
@@ -333,8 +355,9 @@ fn enforce(app: AppHandle) {
     let mut last = Instant::now() - Duration::from_secs(60);
     let mut seen = HashSet::new();
     let mut last_poll = Instant::now() - Duration::from_secs(60);
+    let mut checked = None;
     loop {
-        tick(&mut sys, &mut last, &mut seen);
+        tick(&mut sys, &mut last, &mut seen, &mut checked);
         if last_poll.elapsed() >= Duration::from_secs(60) {
             last_poll = Instant::now();
             thread::spawn(poll_link); // own thread: a slow network must not pause the app killer
@@ -351,12 +374,21 @@ fn enforce(app: AppHandle) {
 fn watchdog() {
     let mut sys = System::new();
     let mut last = Instant::now() - Duration::from_secs(60);
+    let mut checked = None;
     loop {
         let (mains, older_dogs) = peers(&mut sys);
         if older_dogs > 0 {
             return; // another watchdog wins; never two, never zero
         }
-        match load() {
+        // The main app keeps the lock's clock; while it is gone the watchdog does, so a clock change
+        // plus ending the app can't end the lock.
+        let lock = if mains == 0 {
+            advance(&mut checked)
+        } else {
+            checked = None;
+            load()
+        };
+        match lock {
             None => return,
             Some(l) if now_ms() >= l.end_ms => {
                 end_lock();
@@ -398,10 +430,9 @@ fn adopt(end: u64) {
         let _g = guard();
         let l = match load_raw() {
             Some(l) if now < l.end_ms => Lock { end_ms: l.end_ms.max(end), ..l },
-            _ => Lock { start_ms: now, end_ms: end, sites: vec![], apps: vec![], blocked: 0 },
+            _ => Lock { start_ms: now, end_ms: end, sites: vec![], apps: vec![], blocked: 0, seen_ms: now },
         };
-        let Ok(json) = serde_json::to_string(&l) else { return };
-        if fs::write(lock_path(), json).is_err() {
+        if write_raw(&l).is_err() {
             return;
         }
         l
@@ -479,7 +510,7 @@ async fn start_lock(minutes: u32, sites: Vec<String>, apps: Vec<String>) -> Resu
     let sites = sites.iter().map(|s| logic::clean_site(s)).collect::<Result<Vec<_>, _>>()?;
     let apps = apps.iter().map(|s| logic::clean_app(s)).collect::<Result<Vec<_>, _>>()?;
     let now = now_ms();
-    let l = Lock { start_ms: now, end_ms: now + u64::from(minutes) * 60_000, sites, apps, blocked: 0 };
+    let l = Lock { start_ms: now, end_ms: now + u64::from(minutes) * 60_000, sites, apps, blocked: 0, seen_ms: now };
     save(&l)?;
     // Never start a lock that cannot block (e.g. not admin): undo and report.
     if let Err(e) = apply_hosts(&l) {
