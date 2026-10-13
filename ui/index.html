@@ -49,6 +49,7 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
 .start:hover{filter:brightness(1.08)}
 .start:active{transform:scale(.985)}
 .start:disabled{opacity:.55;cursor:default}
+.note{margin-top:10px;font-size:.85rem;color:var(--dim)}
 #err{min-height:1.4em;color:var(--danger);font-size:.9rem}
 #locked{display:flex;flex-direction:column;align-items:center;gap:20px;margin-top:8px}
 .ringwrap{position:relative;width:240px;height:240px}
@@ -99,6 +100,14 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
         <div class="bl-t">Apps</div><ul class="bl" id="blApps"></ul>
       </details>
     </div>
+    <div class="card" style="margin-top:16px">
+      <h2 id="link-h">Link devices</h2>
+      <form class="add" id="linkForm">
+        <input type="text" id="linkInp" aria-labelledby="link-h" placeholder="Link code, like ABCD-2345" autocomplete="off" spellcheck="false" maxlength="12">
+        <button class="btn2" type="submit">Save</button>
+      </form>
+      <p class="note" id="linkNote"></p>
+    </div>
   </section>
 
   <section id="locked" hidden aria-live="off">
@@ -135,6 +144,8 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
     var lock = null;
     return function (cmd, args) {
       if (cmd === "get_blocklist") return Promise.resolve({ sites: ["instagram.com", "youtube.com"], apps: ["whatsapp.exe", "instagram.exe"] });
+      if (cmd === "get_link") return Promise.resolve("");
+      if (cmd === "set_link") return Promise.resolve(args.code.toUpperCase().replace(/[^A-Z0-9]/g, ""));
       if (cmd === "start_lock") { lock = { s: Date.now(), e: Date.now() + args.minutes * 60000, sites: args.sites, apps: args.apps }; return Promise.resolve(); }
       var rem = lock ? Math.max(0, Math.ceil((lock.e - Date.now()) / 1000)) : 0;
       if (lock && !rem) lock = null;
@@ -225,7 +236,19 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
       .then(function () { busy = false; $("start").disabled = false; });
   };
 
+  function drawLink(c) {
+    $("linkInp").value = c ? c.slice(0, 4) + "-" + c.slice(4) : "";
+    $("linkNote").textContent = c
+      ? "Linked. A Hard Lock started on your phone, maatram.co.in or Chrome locks this PC too, and a lock started here locks them. Maatram stays in the tray and starts with Windows. Clear the code and save to unlink."
+      : "Use the link code from maatram.co.in to share one Hard Lock across your phone, browser and this PC.";
+  }
+  $("linkForm").onsubmit = function (ev) {
+    ev.preventDefault(); setErr("");
+    invoke("set_link", { code: $("linkInp").value }).then(drawLink).catch(function (e) { setErr(String(e)); });
+  };
+
   drawChips();
+  invoke("get_link").then(drawLink).catch(function () {});
   invoke("get_blocklist").then(function (b) { fill($("blSites"), b.sites); fill($("blApps"), b.apps); }).catch(function () {});
   poll();
   setInterval(poll, 1000);

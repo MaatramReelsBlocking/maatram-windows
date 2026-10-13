@@ -177,6 +177,26 @@ pub fn remaining_secs(end_ms: u64, now_ms: u64) -> u64 {
     end_ms.saturating_sub(now_ms).div_ceil(1000)
 }
 
+/// "abcd-2345" -> "ABCD2345". Blank is Ok("") (unlink). Same alphabet as maatram.co.in/api/link: no I, O, 0, 1.
+pub fn clean_code(raw: &str) -> Result<String, String> {
+    let c = raw.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    let ok = c.is_empty() || (c.len() == 8 && c.chars().all(|ch| matches!(ch, 'A'..='H' | 'J'..='N' | 'P'..='Z' | '2'..='9')));
+    if ok {
+        Ok(c)
+    } else {
+        Err("A link code is 8 letters and digits, like ABCD-2345".into())
+    }
+}
+
+/// End time on this PC's clock for the shared lock, or None if it should not lock or extend here.
+/// Same rules as the phone app (Link.kt): use the server's remaining time so clock skew does not matter,
+/// ignore a lock about to end, and only extend by more than 5 s. Capped at `max_min` (the server's cap too).
+pub fn link_end(server_end: u64, server_now: u64, minutes: u64, local_now: u64, local_end: u64, max_min: u64) -> Option<u64> {
+    let left = server_end.saturating_sub(server_now).min(max_min * 60_000);
+    let end = local_now + left;
+    (minutes > 0 && left > 3_000 && end > local_end + 5_000).then_some(end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +266,26 @@ mod tests {
         assert_eq!(remaining_secs(10_000, 0), 10);
         assert_eq!(remaining_secs(10_001, 0), 11);
         assert_eq!(remaining_secs(5, 10), 0);
+    }
+
+    #[test]
+    fn code_cleaning() {
+        assert_eq!(clean_code(" abcd-2345 ").unwrap(), "ABCD2345");
+        assert_eq!(clean_code("").unwrap(), "");
+        assert!(clean_code("ABCD234").is_err());
+        assert!(clean_code("ABCD2341").is_err()); // 1 is not in the alphabet
+        assert!(clean_code("IOCD2345").is_err());
+    }
+
+    #[test]
+    fn link_end_rules() {
+        // Server says 10 min left; this PC's clock is way off: still 10 min from local now.
+        assert_eq!(link_end(1_600_000, 1_000_000, 10, 5, 0, 90), Some(600_005));
+        assert_eq!(link_end(1_002_000, 1_000_000, 10, 0, 0, 90), None); // about to end
+        assert_eq!(link_end(0, 1_000_000, 0, 0, 0, 90), None); // no lock
+        assert_eq!(link_end(1_600_000, 1_000_000, 0, 0, 0, 90), None);
+        assert_eq!(link_end(1_600_000, 1_000_000, 10, 0, 598_000, 90), None); // ours already as long
+        assert_eq!(link_end(1_600_000, 1_000_000, 10, 0, 500_000, 90), Some(600_000)); // extend
+        assert_eq!(link_end(u64::MAX, 0, 10, 0, 0, 90), Some(90 * 60_000)); // capped
     }
 }

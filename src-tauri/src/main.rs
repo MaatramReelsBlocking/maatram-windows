@@ -23,6 +23,7 @@ const TASK: &str = "MaatramHardLock"; // logon task -> main app (hidden to tray)
 const DOG: &str = "MaatramWatchdog"; // logon task -> watchdog
 const MAX_MIN: u32 = 90;
 const MAX_CUSTOM: usize = 30; // same cap as the UI
+const API: &str = "https://maatram.co.in/api/link"; // shared lock with the phone app, website and Chrome
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000; // CREATE_NO_WINDOW
 
@@ -103,6 +104,14 @@ fn bump(n: u32) {
     }
 }
 
+fn link_path() -> PathBuf {
+    data_dir().join("link.txt")
+}
+
+fn link_code() -> String {
+    fs::read_to_string(link_path()).unwrap_or_default().trim().to_string()
+}
+
 fn is_locked() -> bool {
     load().is_some_and(|l| now_ms() < l.end_ms)
 }
@@ -118,6 +127,19 @@ fn run(cmd: &str, args: &[&str]) -> bool {
         c.creation_flags(NO_WINDOW);
     }
     c.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// curl.exe ships with Windows 10 and later, so no HTTP crate. None on any failure, including HTTP errors.
+fn curl(args: &[&str]) -> Option<String> {
+    let mut c = Command::new("curl");
+    c.args(["-s", "-f", "-m", "8"]).args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(NO_WINDOW);
+    }
+    let o = c.output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
 fn exe_name() -> String {
@@ -259,8 +281,10 @@ fn restore_hosts() {
 
 fn end_lock() {
     restore_hosts();
-    for t in [TASK, DOG] {
-        run("schtasks", &["/Delete", "/TN", t, "/F"]);
+    run("schtasks", &["/Delete", "/TN", DOG, "/F"]);
+    // A linked PC keeps starting with Windows so a lock from another device can reach it.
+    if link_code().is_empty() {
+        run("schtasks", &["/Delete", "/TN", TASK, "/F"]);
     }
     let _g = guard();
     let _ = fs::remove_file(lock_path());
@@ -308,8 +332,13 @@ fn enforce(app: AppHandle) {
     let mut sys = System::new();
     let mut last = Instant::now() - Duration::from_secs(60);
     let mut seen = HashSet::new();
+    let mut last_poll = Instant::now() - Duration::from_secs(60);
     loop {
         tick(&mut sys, &mut last, &mut seen);
+        if last_poll.elapsed() >= Duration::from_secs(60) {
+            last_poll = Instant::now();
+            thread::spawn(poll_link); // own thread: a slow network must not pause the app killer
+        }
         // A second launch left a note instead of opening a duplicate: bring this window up.
         if fs::remove_file(show_flag()).is_ok() {
             show(&app);
@@ -344,11 +373,59 @@ fn watchdog() {
     }
 }
 
+// ---------- linked devices ----------
+
+/// Checks the shared lock and starts or extends the lock here if it ends later than ours (like Link.kt).
+fn poll_link() {
+    let code = link_code();
+    if code.is_empty() {
+        return;
+    }
+    let Some(body) = curl(&[&format!("{API}?code={code}")]) else { return };
+    let Ok(d) = serde_json::from_str::<serde_json::Value>(&body) else { return };
+    let n = |k: &str| d[k].as_u64().unwrap_or(0);
+    let now = now_ms();
+    let ours = load().filter(|l| now < l.end_ms).map_or(0, |l| l.end_ms);
+    if let Some(end) = logic::link_end(n("end"), n("now"), n("minutes"), now, ours, u64::from(MAX_MIN)) {
+        adopt(end);
+    }
+}
+
+/// Starts a lock ending at `end` with the built-in blocklist, or extends the running one (keeping its custom list).
+fn adopt(end: u64) {
+    let now = now_ms();
+    let l = {
+        let _g = guard();
+        let l = match load_raw() {
+            Some(l) if now < l.end_ms => Lock { end_ms: l.end_ms.max(end), ..l },
+            _ => Lock { start_ms: now, end_ms: end, sites: vec![], apps: vec![], blocked: 0 },
+        };
+        let Ok(json) = serde_json::to_string(&l) else { return };
+        if fs::write(lock_path(), json).is_err() {
+            return;
+        }
+        l
+    };
+    let _ = apply_hosts(&l);
+    arm();
+}
+
+/// Tells the other linked devices about a lock started on this PC. A 409 (a longer lock runs) is fine.
+fn push_link(minutes: u32) {
+    let code = link_code();
+    if code.is_empty() {
+        return;
+    }
+    let body = serde_json::json!({ "code": code, "minutes": minutes, "by": "pc" }).to_string();
+    curl(&["-X", "POST", "-H", "Content-Type: application/json", "-d", &body, API]);
+}
+
 /// Run by the uninstaller (`--cleanup`): uninstalling mid-lock must never leave sites blocked forever.
 fn cleanup() {
     {
         let _g = guard();
         let _ = fs::remove_file(lock_path());
+        let _ = fs::remove_file(link_path()); // so end_lock also removes the sign-in task
     }
     thread::sleep(Duration::from_secs(3)); // watchdog sees no lock and exits instead of relaunching
     let mut sys = System::new();
@@ -410,10 +487,38 @@ async fn start_lock(minutes: u32, sites: Vec<String>, apps: Vec<String>) -> Resu
         let _ = fs::remove_file(lock_path());
         return Err(e);
     }
+    arm();
+    thread::spawn(move || push_link(minutes));
+    Ok(())
+}
+
+/// Sign-in tasks + watchdog, so the lock survives the app being ended or a reboot.
+fn arm() {
     create_task(TASK, "--autostart");
     create_task(DOG, "--watchdog");
     launch(DOG, "--watchdog");
-    Ok(())
+}
+
+#[tauri::command]
+fn get_link() -> String {
+    link_code()
+}
+
+/// Saves a link code (blank unlinks) and returns it cleaned. Linking makes the app start with Windows.
+#[tauri::command]
+async fn set_link(code: String) -> Result<String, String> {
+    let c = logic::clean_code(&code)?;
+    if c.is_empty() {
+        let _ = fs::remove_file(link_path());
+        if !is_locked() {
+            run("schtasks", &["/Delete", "/TN", TASK, "/F"]);
+        }
+    } else {
+        fs::write(link_path(), &c).map_err(|e| format!("Cannot save the link code: {e}"))?;
+        create_task(TASK, "--autostart");
+        thread::spawn(poll_link);
+    }
+    Ok(c)
 }
 
 // ---------- app ----------
@@ -466,7 +571,7 @@ fn main() {
             }
             tray.build(app)?;
 
-            if !(env::args().any(|a| a == "--autostart") && is_locked()) {
+            if !(env::args().any(|a| a == "--autostart") && (is_locked() || !link_code().is_empty())) {
                 show(app.handle());
             }
             let handle = app.handle().clone();
@@ -475,13 +580,14 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if is_locked() {
+                // Locked, or linked (it must keep running to hear about locks from other devices): hide to tray.
+                if is_locked() || !link_code().is_empty() {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_state, get_blocklist, start_lock])
+        .invoke_handler(tauri::generate_handler![get_state, get_blocklist, start_lock, get_link, set_link])
         .run(tauri::generate_context!())
         .expect("failed to start Maatram Hard Lock");
 }
