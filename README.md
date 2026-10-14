@@ -42,7 +42,7 @@ Uninstalling Maatram (Settings → Apps) also ends any running lock and cleans t
 
 - Browsers using their own DNS-over-HTTPS (Firefox by default) can ignore the hosts file. The Chrome extension covers Chrome.
 - A user with admin rights can still defeat the lock by killing both processes at the same moment. The watchdog only slows this down.
-- Changing the system clock changes the countdown.
+- The countdown ignores changes to the system clock. Time the PC is off, or Maatram is not running, does not count.
 - Antivirus may flag an unsigned app that edits the hosts file and closes processes.
 
 ## Layout

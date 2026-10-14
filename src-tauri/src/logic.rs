@@ -177,6 +177,21 @@ pub fn remaining_secs(end_ms: u64, now_ms: u64) -> u64 {
     end_ms.saturating_sub(now_ms).div_ceil(1000)
 }
 
+/// Keeps the time left steady across a wall-clock jump. `seen_ms`: wall time at the last check (0 = none);
+/// `expected_ms`: real time since then on a steady clock (0 when this process hasn't checked before, so a gap
+/// while the app was not running counts as paused). A drift over 3 s moves the end by the same amount.
+pub fn shift_end(end_ms: u64, seen_ms: u64, now_ms: u64, expected_ms: u64) -> u64 {
+    if seen_ms == 0 {
+        return end_ms;
+    }
+    let drift = now_ms as i128 - seen_ms as i128 - expected_ms as i128;
+    if drift.abs() > 3_000 {
+        (end_ms as i128 + drift).max(0) as u64
+    } else {
+        end_ms
+    }
+}
+
 /// "abcd-2345" -> "ABCD2345". Blank is Ok("") (unlink). Same alphabet as maatram.co.in/api/link: no I, O, 0, 1.
 pub fn clean_code(raw: &str) -> Result<String, String> {
     let c = raw.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
@@ -266,6 +281,24 @@ mod tests {
         assert_eq!(remaining_secs(10_000, 0), 10);
         assert_eq!(remaining_secs(10_001, 0), 11);
         assert_eq!(remaining_secs(5, 10), 0);
+    }
+
+    #[test]
+    fn clock_jumps_do_not_change_time_left() {
+        const T: u64 = 1_700_000_000_000;
+        let end = T + 600_000; // 10 min left at wall T
+        // Normal second: nothing moves.
+        assert_eq!(shift_end(end, T, T + 1_000, 1_000), end);
+        // Clock set 2 h forward during that second: end moves too, still 10 min left.
+        let moved = shift_end(end, T, T + 7_200_000 + 1_000, 1_000);
+        assert_eq!(remaining_secs(moved, T + 7_200_000 + 1_000), 599);
+        // Clock set back: the lock is not stretched.
+        let back = shift_end(end, T, T - 3_600_000 + 1_000, 1_000);
+        assert_eq!(remaining_secs(back, T - 3_600_000 + 1_000), 599);
+        // App was not running (restart, killed): the gap counts as paused.
+        assert_eq!(shift_end(end, T, T + 60_000, 0), end + 60_000);
+        // No previous check: unchanged.
+        assert_eq!(shift_end(end, 0, 9_999_999, 0), end);
     }
 
     #[test]
