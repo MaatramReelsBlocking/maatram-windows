@@ -54,7 +54,7 @@ fn enable_autostart(){
     let Some(parent)=path.parent() else{return};
     if fs::create_dir_all(parent).is_err(){return}
     let exe=exe.to_string_lossy().replace('\\',"\\\\").replace('"',"\\\"").replace('%',"%%");
-    let desktop=format!("[Desktop Entry]\\nType=Application\\nName=Maatram Hard Lock\\nComment=Keep an active Hard Lock running\\nExec=\\\"{exe}\\\" --autostart\\nTerminal=false\\nX-GNOME-Autostart-enabled=true\\n");
+    let desktop=format!("[Desktop Entry]\nType=Application\nName=Maatram Hard Lock\nComment=Keep an active Hard Lock running\nExec=\\\"{exe}\\\" --autostart\nTerminal=false\nX-GNOME-Autostart-enabled=true\n");
     let _=fs::write(path,desktop);
 }
 fn disable_autostart(){let _=fs::remove_file(autostart_path());}
