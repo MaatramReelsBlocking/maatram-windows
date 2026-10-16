@@ -74,9 +74,25 @@ fn hosts_block(custom:&[String])->String{
     out.push_str(&format!("{END}\n"));out
 }
 fn strip_hosts(hosts:&str)->String{
-    let mut out=Vec::new();let mut inside=false;
-    for line in hosts.lines(){if line.trim()==BEGIN{inside=true;continue}if inside{if line.trim()==END{inside=false;}continue}out.push(line);}
-    let mut s=out.join("\n");if !s.is_empty(){s.push('\n')}s
+    let lines:Vec<&str>=hosts.lines().collect();
+    let mut out=Vec::new();
+    let mut i=0;
+    while i<lines.len(){
+        if lines[i].trim()==BEGIN {
+            if let Some(off)=lines[i+1..].iter().position(|line|line.trim()==END) {
+                i += off + 2;
+            } else {
+                // A damaged block must not cause unrelated host entries to be deleted.
+                i += 1;
+            }
+            continue;
+        }
+        out.push(lines[i]);
+        i += 1;
+    }
+    let mut result=out.join("\n");
+    if !result.is_empty(){result.push('\n');}
+    result
 }
 fn has_hosts_block(hosts:&str)->bool{hosts.lines().any(|l|l.trim()==BEGIN)}
 fn apply_hosts(l:&Lock)->Result<(),String>{let cur=read_hosts();let want=format!("{}{}",strip_hosts(&cur),hosts_block(&l.sites));if want!=cur{write_hosts_privileged(&want)?;}Ok(())}
@@ -98,7 +114,7 @@ fn push_link(minutes:u32){let code=link_code();if code.is_empty(){return}let bod
 fn cleanup(){ {let _g=guard();let _=fs::remove_file(lock_path());let _=fs::remove_file(link_path());}thread::sleep(Duration::from_secs(3));let mut sys=System::new();refresh(&mut sys);let(me,name)=(std::process::id(),exe_name());for(pid,p)in sys.processes(){if pid.as_u32()!=me&&p.name().to_string_lossy().to_lowercase()==name{p.kill();}}end_lock();}
 #[tauri::command] fn get_blocklist()->Blocklist{let mut sites:Vec<&'static str>=logic::SITES.to_vec();sites.extend_from_slice(logic::EXTRA_HOSTS);Blocklist{sites,apps:LINUX_APPS.to_vec()}}
 #[tauri::command] fn get_state()->State{match load(){Some(l)if now_ms()<l.end_ms=>State{active:true,remaining_secs:logic::remaining_secs(l.end_ms,now_ms()),total_secs:(l.end_ms-l.start_ms)/1000,blocked:l.blocked,custom_sites:l.sites,custom_apps:l.apps},_=>State{active:false,remaining_secs:0,total_secs:0,blocked:0,custom_sites:vec![],custom_apps:vec![]}}}
-fn clean_linux_app(raw:&str)->Result<String,String>{let n=raw.trim().rsplit('/').next().unwrap_or("").trim().to_lowercase();let ok=(2..=100).contains(&n.len())&&n.chars().all(|c|c.is_ascii_lowercase()||c.is_ascii_digit()||matches!(c,'.'|'_'|'-'));if !ok{return Err(format!("Not a valid Linux process name: {}",raw.trim()))}if ["systemd","init","gnome-shell","plasmashell","Xorg","wayland","dbus-daemon","maatram-hardlock"].contains(&n.as_str()){return Err(format!("{n} is protected and cannot be blocked"))}Ok(n)}
+fn clean_linux_app(raw:&str)->Result<String,String>{let n=raw.trim().rsplit('/').next().unwrap_or("").trim().to_lowercase();let ok=(2..=100).contains(&n.len())&&n.chars().all(|c|c.is_ascii_lowercase()||c.is_ascii_digit()||matches!(c,'.'|'_'|'-'));if !ok{return Err(format!("Not a valid Linux process name: {}",raw.trim()))}if ["systemd","init","gnome-shell","plasmashell","xorg","xwayland","weston","sway","kwin_wayland","wayland","dbus-daemon","dbus-broker","polkitd","bash","sh","zsh","fish","maatram-hardlock"].contains(&n.as_str()){return Err(format!("{n} is protected and cannot be blocked"))}Ok(n)}
 #[tauri::command] async fn start_lock(minutes:u32,sites:Vec<String>,apps:Vec<String>)->Result<(),String>{
     if !(1..=MAX_MIN).contains(&minutes){return Err(format!("Pick 1 to {MAX_MIN} minutes"))}if sites.len()+apps.len()>MAX_CUSTOM{return Err(format!("Add at most {MAX_CUSTOM} custom entries"))}if is_locked(){return Err("A lock is already running".into())}
     let sites=sites.iter().map(|s|logic::clean_site(s)).collect::<Result<Vec<_>,_>>()?;let apps=apps.iter().map(|s|clean_linux_app(s)).collect::<Result<Vec<_>,_>>()?;let now=now_ms();let l=Lock{start_ms:now,end_ms:now+u64::from(minutes)*60_000,sites,apps,blocked:0,seen_ms:now};save(&l)?;
