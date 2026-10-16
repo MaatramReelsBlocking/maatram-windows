@@ -1,6 +1,7 @@
 name: Build Windows exe
 
 on:
+  pull_request:
   push:
     tags: ['v*']
   workflow_dispatch:
