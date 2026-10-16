@@ -44,6 +44,20 @@ fn save(l:&Lock)->Result<(),String>{let _g=guard();write_raw(l)}
 fn bump(n:u32){let _g=guard();if let Some(mut l)=load_raw(){l.blocked+=n;let _=write_raw(&l);}}
 fn advance(last:&mut Option<Instant>)->Option<Lock>{let _g=guard();let mut l=load_raw()?;let now=now_ms();let expected=last.map_or(0,|t|t.elapsed().as_millis() as u64);let end=logic::shift_end(l.end_ms,l.seen_ms,now,expected);l.start_ms=(i128::from(l.start_ms)+i128::from(end)-i128::from(l.end_ms)).max(0) as u64;l.end_ms=end;l.seen_ms=now;*last=Some(Instant::now());let _=write_raw(&l);Some(l)}
 fn link_path()->PathBuf{data_dir().join("link.txt")}
+fn autostart_path()->PathBuf{
+    let base=env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(||env::var_os("HOME").map(|h|PathBuf::from(h).join(".config"))).unwrap_or_else(||PathBuf::from("/tmp"));
+    base.join("autostart").join("maatram-hardlock.desktop")
+}
+fn enable_autostart(){
+    let Ok(exe)=env::current_exe() else{return};
+    let path=autostart_path();
+    let Some(parent)=path.parent() else{return};
+    if fs::create_dir_all(parent).is_err(){return}
+    let exe=exe.to_string_lossy().replace('\\',"\\\\").replace('"',"\\\"").replace('%',"%%");
+    let desktop=format!("[Desktop Entry]\\nType=Application\\nName=Maatram Hard Lock\\nComment=Keep an active Hard Lock running\\nExec=\\\"{exe}\\\" --autostart\\nTerminal=false\\nX-GNOME-Autostart-enabled=true\\n");
+    let _=fs::write(path,desktop);
+}
+fn disable_autostart(){let _=fs::remove_file(autostart_path());}
 fn link_code()->String{fs::read_to_string(link_path()).unwrap_or_default().trim().to_string()}
 fn is_locked()->bool{load().is_some_and(|l|now_ms()<l.end_ms)}
 fn run(cmd:&str,args:&[&str])->bool{Command::new(cmd).args(args).output().map(|o|o.status.success()).unwrap_or(false)}
@@ -97,7 +111,7 @@ fn strip_hosts(hosts:&str)->String{
 fn has_hosts_block(hosts:&str)->bool{hosts.lines().any(|l|l.trim()==BEGIN)}
 fn apply_hosts(l:&Lock)->Result<(),String>{let cur=read_hosts();let want=format!("{}{}",strip_hosts(&cur),hosts_block(&l.sites));if want!=cur{write_hosts_privileged(&want)?;}Ok(())}
 fn restore_hosts(){let cur=read_hosts();if has_hosts_block(&cur){let _=write_hosts_privileged(&strip_hosts(&cur));}}
-fn end_lock(){restore_hosts();let _g=guard();let _=fs::remove_file(lock_path());}
+fn end_lock(){restore_hosts();let _g=guard();let _=fs::remove_file(lock_path());drop(_g);if link_code().is_empty(){disable_autostart();}}
 fn show_flag()->PathBuf{data_dir().join("show")}
 fn tick(sys:&mut System,last_dog_launch:&mut Instant,seen:&mut HashSet<String>,checked:&mut Option<Instant>){
     let Some(l)=advance(checked)else{return};if now_ms()>=l.end_ms{end_lock();return}
@@ -120,9 +134,9 @@ fn clean_linux_app(raw:&str)->Result<String,String>{let n=raw.trim().rsplit('/')
     let sites=sites.iter().map(|s|logic::clean_site(s)).collect::<Result<Vec<_>,_>>()?;let apps=apps.iter().map(|s|clean_linux_app(s)).collect::<Result<Vec<_>,_>>()?;let now=now_ms();let l=Lock{start_ms:now,end_ms:now+u64::from(minutes)*60_000,sites,apps,blocked:0,seen_ms:now};save(&l)?;
     if let Err(e)=apply_hosts(&l){let _g=guard();let _=fs::remove_file(lock_path());return Err(e)}arm();thread::spawn(move||push_link(minutes));Ok(())
 }
-fn arm(){launch(TASK,"--autostart");launch(DOG,"--watchdog");}
+fn arm(){enable_autostart();launch(TASK,"--autostart");launch(DOG,"--watchdog");}
 #[tauri::command] fn get_link()->String{link_code()}
-#[tauri::command] async fn set_link(code:String)->Result<String,String>{let c=logic::clean_code(&code)?;if c.is_empty(){let _=fs::remove_file(link_path());}else{fs::write(link_path(),&c).map_err(|e|format!("Cannot save the link code: {e}"))?;thread::spawn(poll_link);}Ok(c)}
+#[tauri::command] async fn set_link(code:String)->Result<String,String>{let c=logic::clean_code(&code)?;if c.is_empty(){let _=fs::remove_file(link_path());if !is_locked(){disable_autostart();}}else{fs::write(link_path(),&c).map_err(|e|format!("Cannot save the link code: {e}"))?;enable_autostart();thread::spawn(poll_link);}Ok(c)}
 fn show(app:&AppHandle){if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.unminimize();let _=w.set_focus();}}
 pub fn run(){
     if env::args().any(|a|a=="--watchdog"){return watchdog()}if env::args().any(|a|a=="--cleanup"){return cleanup()}
