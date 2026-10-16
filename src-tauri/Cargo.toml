@@ -1,7 +1,7 @@
 [package]
 name = "maatram-hardlock"
 version = "0.1.0"
-description = "Maatram Hard Lock for Windows"
+description = "Maatram Hard Lock for Windows and Linux"
 edition = "2021"
 
 [build-dependencies]
