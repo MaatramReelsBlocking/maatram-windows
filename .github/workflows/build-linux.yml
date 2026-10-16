@@ -26,6 +26,10 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Generate icons
         run: |
           python3 -m pip install --user pillow
