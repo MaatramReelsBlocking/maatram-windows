@@ -4,7 +4,7 @@ Maatram Hard Lock is being ported to Linux. The Linux backend is separate from t
 
 ## Build locally
 
-On Ubuntu 22.04 or a compatible Debian-based desktop, install the Tauri prerequisites:
+On Ubuntu 24.04 or a compatible Debian-based desktop, install the Tauri prerequisites:
 
 ```sh
 sudo apt update
