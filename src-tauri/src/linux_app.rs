@@ -60,7 +60,7 @@ fn enable_autostart(){
 fn disable_autostart(){let _=fs::remove_file(autostart_path());}
 fn link_code()->String{fs::read_to_string(link_path()).unwrap_or_default().trim().to_string()}
 fn is_locked()->bool{load().is_some_and(|l|now_ms()<l.end_ms)}
-fn run(cmd:&str,args:&[&str])->bool{Command::new(cmd).args(args).output().map(|o|o.status.success()).unwrap_or(false)}
+fn run_cmd(cmd:&str,args:&[&str])->bool{Command::new(cmd).args(args).output().map(|o|o.status.success()).unwrap_or(false)}
 fn curl(args:&[&str])->Option<String>{let o=Command::new("curl").args(["-s","-f","-m","8"]).args(args).output().ok()?;o.status.success().then(||String::from_utf8_lossy(&o.stdout).into_owned())}
 fn exe_name()->String{env::current_exe().ok().and_then(|p|p.file_name().map(|n|n.to_string_lossy().to_lowercase())).unwrap_or_default()}
 fn is_dog(p:&Process)->bool{p.cmd().iter().any(|a|a=="--watchdog")}
@@ -75,7 +75,7 @@ fn write_hosts_privileged(content:&str)->Result<(),String>{
     fs::write(&tmp,content).map_err(|e|format!("Cannot prepare hosts file: {e}"))?;
     let path=tmp.to_string_lossy().to_string();
     // pkexec prompts through the desktop's polkit agent; the application itself never runs as root.
-    let ok=run("pkexec",&["/usr/bin/install","-o","root","-g","root","-m","0644",&path,"/etc/hosts"]);
+    let ok=run_cmd("pkexec",&["/usr/bin/install","-o","root","-g","root","-m","0644",&path,"/etc/hosts"]);
     let _=fs::remove_file(&tmp);
     if ok { Ok(()) } else { Err("Permission to update /etc/hosts was denied or pkexec is unavailable. Install polkit and approve the permission prompt.".into()) }
 }
@@ -143,7 +143,7 @@ pub fn run(){
     if peers(&mut System::new()).0>0{let _=fs::write(show_flag(),"");return}let _=fs::remove_file(show_flag());
     tauri::Builder::default().setup(|app|{
         let open=MenuItem::with_id(app,"open","Open",true,None::<&str>)?;let quit=MenuItem::with_id(app,"quit","Quit",true,None::<&str>)?;let menu=Menu::with_items(app,&[&open,&quit])?;
-        let mut tray=TrayIconBuilder::new().menu(&menu).show_menu_on_left_click(false).on_menu_event(|app,ev|match ev.id().as_ref(){"open"=>show(app),"quit"if is_locked()=>show(app),"quit"=>app.exit(0),_=>{}}).tooltip("Maatram Hard Lock").on_tray_icon_event(|tray,ev|{if let TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}=ev{show(tray.app_handle());}});
+        let mut tray=TrayIconBuilder::new().menu(&menu).show_menu_on_left_click(false).on_menu_event(|app,ev|match ev.id().as_ref(){"open"=>show(app),"quit" if is_locked() =>show(app),"quit"=>app.exit(0),_=>{}}).tooltip("Maatram Hard Lock").on_tray_icon_event(|tray,ev|{if let TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}=ev{show(tray.app_handle());}});
         if let Some(icon)=app.default_window_icon(){tray=tray.icon(icon.clone());}tray.build(app)?;
         if !(env::args().any(|a|a=="--autostart")&&(is_locked()||!link_code().is_empty())){show(app.handle());}
         let handle=app.handle().clone();thread::spawn(move||enforce(handle));Ok(())
