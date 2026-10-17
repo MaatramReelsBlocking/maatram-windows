@@ -3,6 +3,15 @@
 
 use std::collections::BTreeSet;
 
+/// Bump when the guard's files or inbox format change; the window reinstalls the guard on a mismatch (Linux/macOS).
+pub const GUARD_VERSION: &str = "1";
+
+/// Line ending of the hosts file on this OS.
+#[cfg(windows)]
+pub const NL: &str = "\r\n";
+#[cfg(not(windows))]
+pub const NL: &str = "\n";
+
 pub const BEGIN: &str = "# MAATRAM-BEGIN";
 pub const END: &str = "# MAATRAM-END";
 
@@ -40,6 +49,7 @@ pub const EXTRA_HOSTS: &[&str] = &[
 ];
 
 /// Process names (lowercase) killed while a lock runs.
+#[cfg(windows)]
 pub const APPS: &[&str] = &[
     "whatsapp.exe",
     "whatsapp.root.exe",
@@ -57,7 +67,39 @@ pub const APPS: &[&str] = &[
     "fortniteclient-win64-shipping.exe",
 ];
 
-/// A custom blocklist entry may never kill these (would break Windows or this app's own window).
+/// Linux names are the kernel's process name (15 characters at most, so "telegram-desktop" shows as "telegram-deskto").
+#[cfg(target_os = "linux")]
+pub const APPS: &[&str] = &[
+    "discord",
+    "vesktop",
+    "webcord",
+    "telegram-desktop",
+    "telegram-deskto",
+    "whatsapp-for-linux",
+    "whatsapp-for-lin",
+    "zapzap",
+    "steam",
+    "steamwebhelper",
+    "heroic",
+    "lutris",
+    "minecraft-launcher",
+    "prismlauncher",
+];
+
+#[cfg(target_os = "macos")]
+pub const APPS: &[&str] = &[
+    "discord",
+    "whatsapp",
+    "telegram",
+    "messenger",
+    "steam_osx",
+    "steam helper",
+    "epicgameslauncher",
+    "robloxplayer",
+];
+
+/// A custom blocklist entry may never kill these (would break the OS or this app's own window).
+#[cfg(windows)]
 const PROTECTED: &[&str] = &[
     "explorer.exe",
     "svchost.exe",
@@ -73,6 +115,42 @@ const PROTECTED: &[&str] = &[
     "conhost.exe",
     "msedgewebview2.exe",
     "maatram-hardlock.exe",
+];
+
+#[cfg(unix)]
+const PROTECTED: &[&str] = &[
+    "systemd",
+    "init",
+    "launchd",
+    "kernel_task",
+    "sshd",
+    "dbus-daemon",
+    "dbus-broker",
+    "xorg",
+    "xwayland",
+    "gnome-shell",
+    "gnome-session",
+    "plasmashell",
+    "kwin_x11",
+    "kwin_wayland",
+    "sddm",
+    "gdm",
+    "lightdm",
+    "finder",
+    "loginwindow",
+    "windowserver",
+    "dock",
+    "systemuiserver",
+    "bash",
+    "zsh",
+    "sh",
+    "sudo",
+    "login",
+    "maatram-hardlock",
+    "maatram-guard",
+    "webkitwebprocess",
+    "webkitnetworkprocess",
+    "webkitgpuprocess",
 ];
 
 /// "https://www.Instagram.com/reels?x=1" -> "instagram.com". Rejects anything that is not a plain hostname.
@@ -104,6 +182,7 @@ pub fn clean_site(raw: &str) -> Result<String, String> {
 }
 
 /// "WhatsApp" or "C:\\x\\Foo.EXE" -> "whatsapp.exe" / "foo.exe". Refuses protected system processes.
+#[cfg(windows)]
 pub fn clean_app(raw: &str) -> Result<String, String> {
     let t = raw.trim().to_lowercase();
     let base = t.rsplit(['\\', '/']).next().unwrap_or("");
@@ -123,6 +202,23 @@ pub fn clean_app(raw: &str) -> Result<String, String> {
     Ok(n)
 }
 
+/// "Discord" or "/usr/bin/Discord" -> "discord". Names are the process name, no extension. Refuses protected processes.
+#[cfg(unix)]
+pub fn clean_app(raw: &str) -> Result<String, String> {
+    let t = raw.trim().to_lowercase();
+    let n = t.rsplit('/').next().unwrap_or("").to_string();
+    let ok = (2..=64).contains(&n.len())
+        && !n.starts_with(['.', '-'])
+        && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-' | ' ' | '+'));
+    if !ok {
+        return Err(format!("Not a valid app name: {}", raw.trim()));
+    }
+    if PROTECTED.contains(&n.as_str()) {
+        return Err(format!("{n} is protected and cannot be blocked"));
+    }
+    Ok(n)
+}
+
 /// The full marked block: built-in sites + custom sites, each with www twin, IPv4 and IPv6.
 pub fn hosts_block(custom: &[String]) -> String {
     let mut set = BTreeSet::new();
@@ -133,12 +229,12 @@ pub fn hosts_block(custom: &[String]) -> String {
     for h in EXTRA_HOSTS {
         set.insert((*h).to_string());
     }
-    let mut out = format!("{BEGIN}\r\n");
+    let mut out = format!("{BEGIN}{NL}");
     for h in set {
-        out.push_str(&format!("0.0.0.0 {h}\r\n::1 {h}\r\n"));
+        out.push_str(&format!("0.0.0.0 {h}{NL}::1 {h}{NL}"));
     }
     out.push_str(END);
-    out.push_str("\r\n");
+    out.push_str(NL);
     out
 }
 
@@ -159,12 +255,12 @@ pub fn strip_block(hosts: &str) -> String {
             }
         }
     }
-    let joined = lines.join("\r\n");
+    let joined = lines.join(NL);
     let t = joined.trim_end();
     if t.is_empty() {
         String::new()
     } else {
-        format!("{t}\r\n")
+        format!("{t}{NL}")
     }
 }
 
@@ -228,6 +324,22 @@ mod tests {
         assert!(clean_site("").is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn app_cleaning_unix() {
+        assert_eq!(clean_app("Discord").unwrap(), "discord");
+        assert_eq!(clean_app("/usr/bin/Steam").unwrap(), "steam");
+        assert_eq!(clean_app("Steam Helper").unwrap(), "steam helper");
+        assert!(clean_app("systemd").is_err());
+        assert!(clean_app("Finder").is_err());
+        assert!(clean_app("maatram-guard").is_err());
+        assert!(clean_app("bad;name").is_err());
+        assert!(clean_app("-x").is_err());
+        assert!(clean_app("").is_err());
+        assert!(clean_app("a").is_err());
+    }
+
+    #[cfg(windows)]
     #[test]
     fn app_cleaning() {
         assert_eq!(clean_app("WhatsApp").unwrap(), "whatsapp.exe");
@@ -273,7 +385,7 @@ mod tests {
     fn strip_handles_lf_and_empty() {
         assert_eq!(strip_block(""), "");
         let h = format!("a\n{BEGIN}\nx\n{END}\nb\n");
-        assert_eq!(strip_block(&h), "a\r\nb\r\n");
+        assert_eq!(strip_block(&h), format!("a{NL}b{NL}"));
     }
 
     #[test]

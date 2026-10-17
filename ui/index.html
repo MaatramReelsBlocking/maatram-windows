@@ -144,6 +144,7 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
     var lock = null;
     return function (cmd, args) {
       if (cmd === "get_blocklist") return Promise.resolve({ sites: ["instagram.com", "youtube.com"], apps: ["whatsapp.exe", "instagram.exe"] });
+      if (cmd === "get_platform") return Promise.resolve("windows");
       if (cmd === "get_link") return Promise.resolve("");
       if (cmd === "set_link") return Promise.resolve(args.code.toUpperCase().replace(/[^A-Z0-9]/g, ""));
       if (cmd === "start_lock") { lock = { s: Date.now(), e: Date.now() + args.minutes * 60000, sites: args.sites, apps: args.apps }; return Promise.resolve(); }
@@ -236,11 +237,15 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
       .then(function () { busy = false; $("start").disabled = false; });
   };
 
+  var OS = "windows";
   function drawLink(c) {
     $("linkInp").value = c ? c.slice(0, 4) + "-" + c.slice(4) : "";
+    var where = OS === "windows"
+      ? "Maatram stays in the tray and starts with Windows."
+      : "The Maatram guard keeps listening in the background, even when this window is closed.";
     $("linkNote").textContent = c
-      ? "Linked. A Hard Lock started on your phone, maatram.co.in or Chrome locks this PC too, and a lock started here locks them. Maatram stays in the tray and starts with Windows. Clear the code and save to unlink."
-      : "Use the link code from maatram.co.in to share one Hard Lock across your phone, browser and this PC.";
+      ? "Linked. A Hard Lock started on your phone, maatram.co.in or Chrome locks this " + (OS === "windows" ? "PC" : "computer") + " too, and a lock started here locks them. " + where + " Clear the code and save to unlink."
+      : "Use the link code from maatram.co.in to share one Hard Lock across your phone, browser and this " + (OS === "windows" ? "PC" : "computer") + ".";
   }
   $("linkForm").onsubmit = function (ev) {
     ev.preventDefault(); setErr("");
@@ -248,7 +253,12 @@ details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;f
   };
 
   drawChips();
-  invoke("get_link").then(drawLink).catch(function () {});
+  invoke("get_platform").then(function (p) {
+    OS = p;
+    if (p !== "windows") $("addInp").placeholder = "example.com or an app name";
+  }).catch(function () {}).then(function () {
+    invoke("get_link").then(drawLink).catch(function () {});
+  });
   invoke("get_blocklist").then(function (b) { fill($("blSites"), b.sites); fill($("blApps"), b.apps); }).catch(function () {});
   poll();
   setInterval(poll, 1000);

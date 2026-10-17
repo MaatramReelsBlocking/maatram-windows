@@ -32,6 +32,16 @@ Run this checklist:
 6. Restart Windows mid-lock. After you sign in, the lock should still be running.
 7. Wait for the timer to end. Sites and apps should work again, and `C:\Windows\System32\drivers\etc\hosts` should have no `MAATRAM` lines.
 
+## Linux and macOS
+
+Same window and the same Hard Lock, with a small root program (the guard) doing the locking instead of the Windows watchdog.
+
+- **Linux:** `maatram-hardlock-linux-x86_64.AppImage`, `maatram-hardlock-linux-amd64.deb` (Debian, Ubuntu), `maatram-hardlock-linux-x86_64.rpm` (Fedora). The first Start asks for the admin password once to install the guard as a systemd service. Sites are blocked through `/etc/hosts`, apps are closed by name.
+- **macOS:** `maatram-hardlock-macos-universal.dmg` (Apple silicon and Intel). The first Start asks for the admin password once. The app is not notarized: right-click it, choose **Open**, then **Open** again.
+- **If something goes wrong:** `sudo sh Maatram-Restore.sh` ends any lock and cleans `/etc/hosts`. Add `--remove` to remove the guard too.
+- Firefox with its own DNS-over-HTTPS can ignore `/etc/hosts`, same as on Windows.
+- Built by the `linux` and `macos` jobs in `.github/workflows/build.yml`. Not yet tested on a real Linux or Mac desktop.
+
 ## If something goes wrong
 
 Right-click **Maatram-Restore.bat** → **Run as administrator**. It removes the lock, stops the app and watchdog, deletes the sign-in tasks, and cleans the hosts file.

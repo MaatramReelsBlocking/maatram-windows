@@ -26,4 +26,5 @@ tile.paste(grad, (0, 0), mask)
 for name, size in (("icon.png", 512), ("128x128.png", 128), ("128x128@2x.png", 256), ("32x32.png", 32)):
     tile.resize((size, size), Image.LANCZOS).save(os.path.join(out, name))
 tile.save(os.path.join(out, "icon.ico"), format="ICO", sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+tile.save(os.path.join(out, "icon.icns"), format="ICNS")
 print("icons written to", os.path.abspath(out))
